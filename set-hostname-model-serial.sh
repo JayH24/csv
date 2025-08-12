@@ -92,6 +92,14 @@ sanitize_label() {
   printf '%s' "$s"
 }
 
+# Normalize pretty components: trim and collapse whitespace, preserve case and punctuation
+normalize_pretty_component() {
+  local s="$1"
+  s=$(printf '%s' "$s" | tr -d '\0')
+  s=$(printf '%s' "$s" | sed -E 's/[[:space:]]+/ /g; s/^ +//; s/ +$//')
+  printf '%s' "$s"
+}
+
 compose_hostname() {
   local model_raw serial_raw model serial combined max_len
   model_raw=$(get_model_name)
@@ -120,13 +128,42 @@ compose_hostname() {
   printf '%s' "$combined"
 }
 
+# Build a pretty computer name like "Model Name - Serial Number" (allows spaces and case)
+compose_pretty_hostname() {
+  local model_raw serial_raw model_pretty serial_pretty
+  model_raw=$(get_model_name)
+  serial_raw=$(get_serial_number)
+  model_pretty=$(normalize_pretty_component "$model_raw")
+  serial_pretty=$(normalize_pretty_component "$serial_raw")
+  printf '%s - %s' "$model_pretty" "$serial_pretty"
+}
+
+# Write PRETTY_HOSTNAME to /etc/machine-info (systemd-compatible config)
+set_pretty_machine_info() {
+  local pretty="$1"
+  local escaped
+  escaped=$(printf '%s' "$pretty" | sed 's/"/\\"/g')
+  if [[ -f /etc/machine-info ]]; then
+    if grep -Eq '^PRETTY_HOSTNAME=' /etc/machine-info 2>/dev/null; then
+      sed -i -E "s|^PRETTY_HOSTNAME=.*$|PRETTY_HOSTNAME=\"${escaped}\"|" /etc/machine-info
+    else
+      printf 'PRETTY_HOSTNAME="%s"\n' "$escaped" >> /etc/machine-info
+    fi
+  else
+    printf 'PRETTY_HOSTNAME="%s"\n' "$escaped" > /etc/machine-info
+  fi
+}
+
 apply_hostname() {
   local new_hostname="$1"
+  local new_pretty="$2"
   local current_short
   current_short=$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "")
 
   if command -v hostnamectl >/dev/null 2>&1; then
-    hostnamectl set-hostname "$new_hostname"
+    # Set static and pretty hostnames
+    hostnamectl set-hostname "$new_hostname" --static
+    hostnamectl set-hostname "$new_pretty" --pretty || true
   else
     printf '%s\n' "$new_hostname" > /etc/hostname
     hostname "$new_hostname" 2>/dev/null || true
@@ -145,21 +182,27 @@ apply_hostname() {
 
     # Best-effort: replace occurrences of the old short hostname on 127.0.0.1 or 127.0.1.1 lines
     if [[ -n "$current_short" ]]; then
+      local escaped_current_short
       escaped_current_short=$(printf '%s' "$current_short" | sed -e 's/[.[*^$(){}+?|\\]/\\&/g')
       sed -i -E "/^(127\\.0\\.0\\.1|127\\.0\\.1\\.1)[[:space:]]/ s/(^|[[:space:]])${escaped_current_short}([[:space:]]|$)/\\1${new_hostname}\\2/g" /etc/hosts || true
     fi
+
+    # Best-effort pretty name storage for non-systemd systems
+    set_pretty_machine_info "$new_pretty" || true
   fi
 }
 
 main() {
   ensure_root "$@"
-  local target
+  local target pretty_target
   target=$(compose_hostname)
+  pretty_target=$(compose_pretty_hostname)
 
   echo "Current hostname: $(hostname)"
   echo "New hostname    : ${target}"
+  echo "Pretty name     : ${pretty_target}"
 
-  apply_hostname "$target"
+  apply_hostname "$target" "$pretty_target"
 
   echo "Hostname successfully set to: ${target}"
 }
