@@ -21,6 +21,7 @@ set -euo pipefail
 print_usage() {
   cat <<'USAGE'
 Usage: change_wallpaper_mac.sh -p <directory> [options]
+Or (Jamf): provide directory as $4
 
 Options:
   -p, --path <directory>     Directory containing images (jpg, jpeg, png, heic, tiff)
@@ -33,6 +34,7 @@ Examples:
   change_wallpaper_mac.sh -p "$HOME/Pictures/Wallpapers"
   change_wallpaper_mac.sh -p "$HOME/Pictures/Wallpapers" -i 900
   change_wallpaper_mac.sh -p "$HOME/Pictures/Wallpapers" -m sequential -i 300
+  # Jamf: set Parameter 4 to the wallpapers directory (becomes $4 inside the script)
 USAGE
 }
 
@@ -40,6 +42,8 @@ USAGE
 WALL_DIR=""
 INTERVAL=""
 MODE="random"  # or "sequential"
+# Capture original $4 (useful when called from Jamf, where Parameter 4 maps to $4)
+ORIG_ARG4="${4:-}"
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -61,12 +65,16 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "Unknown argument: $1" >&2
-      print_usage
-      exit 1
+      # Ignore unknown positional args (e.g., Jamf $1..$3)
+      shift 1
       ;;
   esac
 done
+
+# If not provided via flags, fall back to original $4
+if [[ -z "$WALL_DIR" && -n "$ORIG_ARG4" ]]; then
+  WALL_DIR="$ORIG_ARG4"
+fi
 
 # Basic validations
 if [[ -z "$WALL_DIR" ]]; then
